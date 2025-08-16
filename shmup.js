@@ -40,101 +40,100 @@ class ShmupScene extends Phaser.Scene {
     this.powerups = this.physics.add.group({ classType: Phaser.Physics.Arcade.Image, maxSize: 8 });
     this.enemyBullets = this.physics.add.group({ classType: Phaser.Physics.Arcade.Image, maxSize: 360 });
 
-    // ====== [BEGIN: Player I-frames + Hit Flash + Screen Shake] ======
-/** Invulnerability window (ms) after a hit */
-this.iFrameDuration = 800;
-/** Whether the player is currently invulnerable */
-this.playerInvulnerable = false;
-/** Lives label refresh helper (optional: keep if you already have one) */
-this.refreshLivesUI = this.refreshLivesUI || (() => {
-  if (this.livesText) this.livesText.setText(`Lives: ${this.lives}`);
-});
+    //Player I-frames + Hit Flash + Screen Shake
 
-/** Fullscreen damage vignette */
-const cam = this.cameras.main;
-this.damageVignette = this.add
-  .rectangle(cam.worldView.x, cam.worldView.y, cam.width, cam.height, 0x000000, 0)
-  .setOrigin(0, 0)
-  .setScrollFactor(0)        // stay glued to camera
-  .setDepth(9999);
-
-/** Ensure the vignette resizes with the camera (in case of resize) */
-this.scale.on('resize', (gameSize) => {
-  const { width, height } = gameSize;
-  this.damageVignette.setSize(width, height);
-}, this);
-
-/** Camera shake wrapper */
-this.applyCameraShake = (duration = 120, intensity = 0.006) => {
-  this.cameras.main.shake(duration, intensity);
-};
-
-/** Fade the damage vignette in/out */
-this.flashDamageVignette = () => {
-  this.damageVignette.setAlpha(0.25);
-  this.tweens.add({
-    targets: this.damageVignette,
-    alpha: 0,
-    duration: 250,
-    ease: 'Quad.Out'
-  });
-};
-
-/** Handle player being hit by an enemy or bullet */
-this.hitPlayer = (player, hazard) => {
-  // If the hazard is an active Arcade body/bullet, clean it up (or recycle)
-  if (hazard && hazard.active && hazard.destroy) {
-    // If you pool bullets, replace with your recycle function:
-    hazard.destroy();
-  }
-
-  if (this.playerInvulnerable) return;
-
-  // Enter i-frames
-  this.playerInvulnerable = true;
-
-  // Feedback: tint + shake + vignette + (optional) sound
-  player.setTint(0xff7a7a);
-  this.applyCameraShake(120, 0.006);
-  this.flashDamageVignette();
-  // Optional SFX if loaded: this.sound.play('hit', { volume: 0.7 });
-
-  // Apply damage rules
-  this.lives = Math.max(0, (this.lives ?? 0) - 1);
-  this.refreshLivesUI();
-
-  // Your current rule: losing any life clears all drones
-  if (typeof this.clearAllDrones === 'function') this.clearAllDrones();
-  if (typeof this.updatePowerupTimer === 'function') this.updatePowerupTimer();
-
-  // Brief invulnerability, then clear tint
-  this.time.delayedCall(this.iFrameDuration, () => {
-    player.clearTint();
+    /** Invulnerability window (ms) after a hit */
+    this.iFrameDuration = 800;
+    /** Whether the player is currently invulnerable */
     this.playerInvulnerable = false;
-  });
+    /** Lives label refresh helper (optional: keep if you already have one) */
+    this.refreshLivesUI = this.refreshLivesUI || (() => {
+      if (this.livesText) this.livesText.setText(`Lives: ${this.lives}`);
+    });
 
-  // If you want an immediate game-over check, you can handle it here:
-  // if (this.lives <= 0) { this.handleGameOver?.(); }
-};
+    /** Fullscreen damage vignette */
+    const cam = this.cameras.main;
+    this.damageVignette = this.add
+      .rectangle(cam.worldView.x, cam.worldView.y, cam.width, cam.height, 0x000000, 0)
+      .setOrigin(0, 0)
+      .setScrollFactor(0)        // stay glued to camera
+      .setDepth(9999);
 
-/** Wire overlaps for damage (player vs enemies & enemy bullets) */
-this.enablePlayerHitOverlap = () => {
-  const overlapOpts = null;
-  const ctx = this;
+    /** Ensure the vignette resizes with the camera (in case of resize) */
+    this.scale.on('resize', (gameSize) => {
+      const { width, height } = gameSize;
+      this.damageVignette.setSize(width, height);
+    }, this);
 
-  // Adjust group names if yours differ:
-  if (this.enemies) {
-    this.physics.add.overlap(this.player, this.enemies, this.hitPlayer, overlapOpts, ctx);
-  }
-  if (this.enemyBullets) {
-    this.physics.add.overlap(this.player, this.enemyBullets, this.hitPlayer, overlapOpts, ctx);
-  }
-};
+    /** Camera shake wrapper */
+    this.applyCameraShake = (duration = 120, intensity = 0.006) => {
+      this.cameras.main.shake(duration, intensity);
+    };
 
-// Call once to activate overlaps
-this.enablePlayerHitOverlap();
-// ====== [END: Player I-frames + Hit Flash + Screen Shake] ======
+    /** Fade the damage vignette in/out */
+    this.flashDamageVignette = () => {
+      this.damageVignette.setAlpha(0.25);
+      this.tweens.add({
+        targets: this.damageVignette,
+        alpha: 0,
+        duration: 250,
+        ease: 'Quad.Out'
+      });
+    };
 
+    /** Handle player being hit by an enemy or bullet */
+    this.hitPlayer = (player, hazard) => {
+      // If the hazard is an active Arcade body/bullet, clean it up (or recycle)
+      if (hazard && hazard.active && hazard.destroy) {
+        // If you pool bullets, replace with your recycle function:
+        hazard.destroy();
+      }
+
+      if (this.playerInvulnerable) return;
+
+      // Enter i-frames
+      this.playerInvulnerable = true;
+
+      // Feedback: tint + shake + vignette + (optional) sound
+      player.setTint(0xff7a7a);
+      this.applyCameraShake(120, 0.006);
+      this.flashDamageVignette();
+      // Optional SFX if loaded: this.sound.play('hit', { volume: 0.7 });
+
+      // Apply damage rules
+      this.lives = Math.max(0, (this.lives ?? 0) - 1);
+      this.refreshLivesUI();
+
+      // Your current rule: losing any life clears all drones
+      if (typeof this.clearAllDrones === 'function') this.clearAllDrones();
+      if (typeof this.updatePowerupTimer === 'function') this.updatePowerupTimer();
+
+      // Brief invulnerability, then clear tint
+      this.time.delayedCall(this.iFrameDuration, () => {
+        player.clearTint();
+        this.playerInvulnerable = false;
+      });
+
+      // If you want an immediate game-over check, you can handle it here:
+      if (this.lives <= 0) { this.handleGameOver?.(); }
+    };
+
+    /** Wire overlaps for damage (player vs enemies & enemy bullets) */
+    this.enablePlayerHitOverlap = () => {
+      const overlapOpts = null;
+      const ctx = this;
+
+      // Adjust group names if yours differ:
+      if (this.enemies) {
+        this.physics.add.overlap(this.player, this.enemies, this.hitPlayer, overlapOpts, ctx);
+      }
+      if (this.enemyBullets) {
+        this.physics.add.overlap(this.player, this.enemyBullets, this.hitPlayer, overlapOpts, ctx);
+      }
+    };
+
+    // Call once to activate overlaps
+    this.enablePlayerHitOverlap();
 
     // Animations
     this.anims.create({
