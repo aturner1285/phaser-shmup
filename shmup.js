@@ -40,6 +40,102 @@ class ShmupScene extends Phaser.Scene {
     this.powerups = this.physics.add.group({ classType: Phaser.Physics.Arcade.Image, maxSize: 8 });
     this.enemyBullets = this.physics.add.group({ classType: Phaser.Physics.Arcade.Image, maxSize: 360 });
 
+    // ====== [BEGIN: Player I-frames + Hit Flash + Screen Shake] ======
+/** Invulnerability window (ms) after a hit */
+this.iFrameDuration = 800;
+/** Whether the player is currently invulnerable */
+this.playerInvulnerable = false;
+/** Lives label refresh helper (optional: keep if you already have one) */
+this.refreshLivesUI = this.refreshLivesUI || (() => {
+  if (this.livesText) this.livesText.setText(`Lives: ${this.lives}`);
+});
+
+/** Fullscreen damage vignette */
+const cam = this.cameras.main;
+this.damageVignette = this.add
+  .rectangle(cam.worldView.x, cam.worldView.y, cam.width, cam.height, 0x000000, 0)
+  .setOrigin(0, 0)
+  .setScrollFactor(0)        // stay glued to camera
+  .setDepth(9999);
+
+/** Ensure the vignette resizes with the camera (in case of resize) */
+this.scale.on('resize', (gameSize) => {
+  const { width, height } = gameSize;
+  this.damageVignette.setSize(width, height);
+}, this);
+
+/** Camera shake wrapper */
+this.applyCameraShake = (duration = 120, intensity = 0.006) => {
+  this.cameras.main.shake(duration, intensity);
+};
+
+/** Fade the damage vignette in/out */
+this.flashDamageVignette = () => {
+  this.damageVignette.setAlpha(0.25);
+  this.tweens.add({
+    targets: this.damageVignette,
+    alpha: 0,
+    duration: 250,
+    ease: 'Quad.Out'
+  });
+};
+
+/** Handle player being hit by an enemy or bullet */
+this.hitPlayer = (player, hazard) => {
+  // If the hazard is an active Arcade body/bullet, clean it up (or recycle)
+  if (hazard && hazard.active && hazard.destroy) {
+    // If you pool bullets, replace with your recycle function:
+    hazard.destroy();
+  }
+
+  if (this.playerInvulnerable) return;
+
+  // Enter i-frames
+  this.playerInvulnerable = true;
+
+  // Feedback: tint + shake + vignette + (optional) sound
+  player.setTint(0xff7a7a);
+  this.applyCameraShake(120, 0.006);
+  this.flashDamageVignette();
+  // Optional SFX if loaded: this.sound.play('hit', { volume: 0.7 });
+
+  // Apply damage rules
+  this.lives = Math.max(0, (this.lives ?? 0) - 1);
+  this.refreshLivesUI();
+
+  // Your current rule: losing any life clears all drones
+  if (typeof this.clearAllDrones === 'function') this.clearAllDrones();
+  if (typeof this.updatePowerupTimer === 'function') this.updatePowerupTimer();
+
+  // Brief invulnerability, then clear tint
+  this.time.delayedCall(this.iFrameDuration, () => {
+    player.clearTint();
+    this.playerInvulnerable = false;
+  });
+
+  // If you want an immediate game-over check, you can handle it here:
+  // if (this.lives <= 0) { this.handleGameOver?.(); }
+};
+
+/** Wire overlaps for damage (player vs enemies & enemy bullets) */
+this.enablePlayerHitOverlap = () => {
+  const overlapOpts = null;
+  const ctx = this;
+
+  // Adjust group names if yours differ:
+  if (this.enemies) {
+    this.physics.add.overlap(this.player, this.enemies, this.hitPlayer, overlapOpts, ctx);
+  }
+  if (this.enemyBullets) {
+    this.physics.add.overlap(this.player, this.enemyBullets, this.hitPlayer, overlapOpts, ctx);
+  }
+};
+
+// Call once to activate overlaps
+this.enablePlayerHitOverlap();
+// ====== [END: Player I-frames + Hit Flash + Screen Shake] ======
+
+
     // Animations
     this.anims.create({
       key: 'bullet-flight',
@@ -375,6 +471,7 @@ class ShmupScene extends Phaser.Scene {
   update(time, delta){
     const { width, height } = this.scale;
     if (this.isGameOver) return;
+    
 
     // Background scroll
     this.bg1.tilePositionY -= this.scrollSpeed * 0.6;
@@ -388,10 +485,23 @@ class ShmupScene extends Phaser.Scene {
     const right = this.cursors.right.isDown || this.keys.D.isDown;
     const speed = 360;
     this.player.setVelocity(0,0);
-    if (up) this.player.setVelocityY(-speed);
-    if (down) this.player.setVelocityY(speed);
-    if (left) this.player.setVelocityX(-speed);
-    if (right) this.player.setVelocityX(speed);
+    
+    //Subtle inertia
+{
+  const speed = 360;
+  let vx = 0, vy = 0;
+
+  if (this.cursors?.left?.isDown || this.keys?.A?.isDown)  vx -= speed;
+  if (this.cursors?.right?.isDown || this.keys?.D?.isDown) vx += speed;
+  if (this.cursors?.up?.isDown || this.keys?.W?.isDown)    vy -= speed;
+  if (this.cursors?.down?.isDown || this.keys?.S?.isDown)  vy += speed;
+
+  if (this.player?.body) {
+    this.player.body.velocity.x = Phaser.Math.Linear(this.player.body.velocity.x, vx, 0.60);
+    this.player.body.velocity.y = Phaser.Math.Linear(this.player.body.velocity.y, vy, 0.60);
+  }
+}
+
 
     // Drones follow offsets
     for (const d of this.drones){
@@ -449,7 +559,25 @@ class ShmupScene extends Phaser.Scene {
       if (!p || !p.active) return;
       if (p.y > height + 40) p.disableBody(true, true);
     });
+  
+   // ====== Player bounds clamp (place at END of update()) ======
+{
+  const cam = this.cameras.main;
+  const margin = 16;
+  if (this.player) {
+    this.player.x = Phaser.Math.Clamp(
+      this.player.x,
+      cam.worldView.x + margin,
+      cam.worldView.x + cam.width - margin
+    );
+    this.player.y = Phaser.Math.Clamp(
+      this.player.y,
+      cam.worldView.y + margin,
+      cam.worldView.y + cam.height - margin
+    );
+  }}
   }
+  
 
   gameOver(){
     // Also nuke bars for any remaining enemies
@@ -463,4 +591,5 @@ class ShmupScene extends Phaser.Scene {
     this.physics.world.pause();
     this.goText.setVisible(true);
   }
+  
 }
