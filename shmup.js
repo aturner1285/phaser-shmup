@@ -19,123 +19,55 @@ class ShmupScene extends Phaser.Scene {
   create(){
     const { width, height } = this.scale;
 
-    // Background (transparent layers)
+    // ====== State flags & timers ======
+    this.isGameOver = false;          // single source of truth for end-of-run
+    this.hitCooldownMs = 1200;        // i-frame length
+    this.nextHitAllowedAt = 0;        // timestamp-gated i-frames
+
+    // ====== Background ======
     this.bg1 = this.add.tileSprite(0, 0, width, height, 'star1').setOrigin(0).setAlpha(0.12);
     this.bg2 = this.add.tileSprite(0, 0, width, height, 'star2').setOrigin(0).setAlpha(0.20);
     this.bg3 = this.add.tileSprite(0, 0, width, height, 'star3').setOrigin(0).setAlpha(0.30);
     this.bg1.setScrollFactor(0); this.bg2.setScrollFactor(0); this.bg3.setScrollFactor(0);
     this.scrollSpeed = 1.4;
 
-    // Player
-    this.player = this.physics.add.image(width/2, height - 120, 'ship').setCollideWorldBounds(true);
-    this.player.setAngle(-90);
+    // ====== Player ======
+    this.player = this.physics.add.image(width/2, height - 120, 'ship')
+      .setCollideWorldBounds(true)
+      .setAngle(-90);
 
-    // Controls
+    // ====== Input ======
     this.cursors = this.input.keyboard.createCursorKeys();
     this.keys = this.input.keyboard.addKeys('W,A,S,D,SPACE,R');
 
-    // Groups
+    // ====== Groups / Pools ======
     this.bullets = this.physics.add.group({ classType: Phaser.Physics.Arcade.Sprite, maxSize: 360 });
     this.enemies = this.physics.add.group({ classType: Phaser.Physics.Arcade.Image, maxSize: 220 });
     this.powerups = this.physics.add.group({ classType: Phaser.Physics.Arcade.Image, maxSize: 8 });
     this.enemyBullets = this.physics.add.group({ classType: Phaser.Physics.Arcade.Image, maxSize: 360 });
 
-    //Player I-frames + Hit Flash + Screen Shake
-
-    /** Invulnerability window (ms) after a hit */
-    this.iFrameDuration = 800;
-    /** Whether the player is currently invulnerable */
-    this.playerInvulnerable = false;
-    /** Lives label refresh helper (optional: keep if you already have one) */
-    this.refreshLivesUI = this.refreshLivesUI || (() => {
-      if (this.livesText) this.livesText.setText(`Lives: ${this.lives}`);
-    });
-
-    /** Fullscreen damage vignette */
+    // ====== VFX helpers ======
     const cam = this.cameras.main;
     this.damageVignette = this.add
       .rectangle(cam.worldView.x, cam.worldView.y, cam.width, cam.height, 0x000000, 0)
       .setOrigin(0, 0)
-      .setScrollFactor(0)        // stay glued to camera
+      .setScrollFactor(0)
       .setDepth(9999);
-
-    /** Ensure the vignette resizes with the camera (in case of resize) */
     this.scale.on('resize', (gameSize) => {
       const { width, height } = gameSize;
       this.damageVignette.setSize(width, height);
     }, this);
 
-    /** Camera shake wrapper */
-    this.applyCameraShake = (duration = 120, intensity = 0.006) => {
+    this.applyCameraShake = (duration = 150, intensity = 0.008) => {
       this.cameras.main.shake(duration, intensity);
     };
 
-    /** Fade the damage vignette in/out */
     this.flashDamageVignette = () => {
       this.damageVignette.setAlpha(0.25);
-      this.tweens.add({
-        targets: this.damageVignette,
-        alpha: 0,
-        duration: 250,
-        ease: 'Quad.Out'
-      });
+      this.tweens.add({ targets: this.damageVignette, alpha: 0, duration: 250, ease: 'Quad.Out' });
     };
 
-    /** Handle player being hit by an enemy or bullet */
-    this.hitPlayer = (player, hazard) => {
-      // If the hazard is an active Arcade body/bullet, clean it up (or recycle)
-      if (hazard && hazard.active && hazard.destroy) {
-        // If you pool bullets, replace with your recycle function:
-        hazard.destroy();
-      }
-
-      if (this.playerInvulnerable) return;
-
-      // Enter i-frames
-      this.playerInvulnerable = true;
-
-      // Feedback: tint + shake + vignette + (optional) sound
-      player.setTint(0xff7a7a);
-      this.applyCameraShake(120, 0.006);
-      this.flashDamageVignette();
-      // Optional SFX if loaded: this.sound.play('hit', { volume: 0.7 });
-
-      // Apply damage rules
-      this.lives = Math.max(0, (this.lives ?? 0) - 1);
-      this.refreshLivesUI();
-
-      // Your current rule: losing any life clears all drones
-      if (typeof this.clearAllDrones === 'function') this.clearAllDrones();
-      if (typeof this.updatePowerupTimer === 'function') this.updatePowerupTimer();
-
-      // Brief invulnerability, then clear tint
-      this.time.delayedCall(this.iFrameDuration, () => {
-        player.clearTint();
-        this.playerInvulnerable = false;
-      });
-
-      // If you want an immediate game-over check, you can handle it here:
-      if (this.lives <= 0) { this.handleGameOver?.(); }
-    };
-
-    /** Wire overlaps for damage (player vs enemies & enemy bullets) */
-    this.enablePlayerHitOverlap = () => {
-      const overlapOpts = null;
-      const ctx = this;
-
-      // Adjust group names if yours differ:
-      if (this.enemies) {
-        this.physics.add.overlap(this.player, this.enemies, this.hitPlayer, overlapOpts, ctx);
-      }
-      if (this.enemyBullets) {
-        this.physics.add.overlap(this.player, this.enemyBullets, this.hitPlayer, overlapOpts, ctx);
-      }
-    };
-
-    // Call once to activate overlaps
-    this.enablePlayerHitOverlap();
-
-    // Animations
+    // ====== Animations ======
     this.anims.create({
       key: 'bullet-flight',
       frames: this.anims.generateFrameNumbers('bullet_anim', { start: 0, end: 7 }),
@@ -143,13 +75,115 @@ class ShmupScene extends Phaser.Scene {
       repeat: -1
     });
 
-    // Collisions
-    this.physics.add.overlap(this.bullets, this.enemies, this.onBulletHitEnemy, null, this);
-    this.physics.add.overlap(this.player, this.enemies, this.onPlayerHit, null, this);
-    this.physics.add.overlap(this.player, this.powerups, this.onCollectPower, null, this);
-    this.physics.add.overlap(this.player, this.enemyBullets, this.onPlayerHit, null, this);
+    // ====== HUD ======
+    this.score = 0;
+    this.lives = 3;
 
-    // Cleanup on world bounds for both bullet types
+    this.scoreText = this.add.text(16, 16, 'Score: 0', { fontSize:'24px', color:'#e6ecff' })
+      .setScrollFactor(0)
+      .setDepth(2000);
+
+    this.livesText = this.add.text(16, 46, '', { fontSize:'18px', color:'#b9c3e6' })
+      .setScrollFactor(0)
+      .setDepth(2000);
+
+    this.droneText = this.add.text(16, 70, 'Drones: 0/4', { fontSize:'16px', color:'#9ad1ff' })
+      .setScrollFactor(0)
+      .setDepth(2000);
+
+    this.updateLivesText = () => { this.livesText.setText(`Lives: ${this.lives}`); };
+    this.updateLivesText();
+
+    // ====== Game Over UI ======
+    this.goText = this.add.text(width/2, height/2, 'GAME OVER\nPress R to Restart', { fontSize:'26px', color:'#e6ecff', align:'center' })
+      .setOrigin(0.5)
+      .setScrollFactor(0)
+      .setDepth(2000)
+      .setVisible(false);
+
+    this.input.keyboard.on('keydown-R', () => {
+      if (this.isGameOver) this.scene.restart();
+    });
+
+    // ====== Firing ======
+    this.fireRate = 120;
+    this.shootHeld = false;
+    this.shootTimer = null;
+    this.input.keyboard.on('keydown-SPACE', () => {
+      if (this.shootHeld || this.isGameOver) return;
+      this.shootHeld = true;
+      this.fire();
+      this.shootTimer = this.time.addEvent({ delay: this.fireRate, loop: true, callback: this.fire, callbackScope: this });
+    });
+    this.input.keyboard.on('keyup-SPACE', () => {
+      this.shootHeld = false;
+      if (this.shootTimer){ this.shootTimer.remove(); this.shootTimer = null; }
+    });
+
+    // ====== Drones ======
+    this.drones = [];
+    this.DRONE_CAP = 4;
+
+    // ====== Damage handler (unified) ======
+    this.hitPlayer = (player, hazard) => {
+      if (this.isGameOver) return;
+
+      const now = this.time.now;
+      if (now < this.nextHitAllowedAt) return;   // i-frames gate
+      this.nextHitAllowedAt = now + this.hitCooldownMs;
+
+      // Feedback
+      this.applyCameraShake();
+      this.flashDamageVignette();
+      player.setTint(0xffaaaa);
+      this.time.delayedCall(150, () => player.clearTint());
+
+      // State change
+      this.lives = Math.max(0, this.lives - 1);
+      this.updateLivesText();
+      this.loseAllDrones();
+
+      // Clean up the thing that hit us (enemy or bullet)
+      if (hazard?.active) {
+        hazard.disableBody?.(true, true);
+        hazard.hpBar?.destroy?.();
+        hazard.hpBarBg?.destroy?.();
+      }
+
+      // Death check
+      if (this.lives <= 0) {
+        this.gameOver();
+      }
+    };
+
+    // ====== Overlaps (wired once & safely) ======
+    this.enablePlayerHitOverlap = () => {
+      // Destroy old colliders if re-wiring (e.g., after a restart)
+      this.playerEnemyCollider?.destroy();
+      this.playerBulletCollider?.destroy();
+
+      this.playerEnemyCollider = this.physics.add.overlap(
+        this.player,
+        this.enemies,
+        this.hitPlayer,
+        null,
+        this
+      );
+
+      this.playerBulletCollider = this.physics.add.overlap(
+        this.player,
+        this.enemyBullets,
+        this.hitPlayer,
+        null,
+        this
+      );
+    };
+
+    // ====== Collisions (non-damage) ======
+    this.physics.add.overlap(this.bullets, this.enemies, this.onBulletHitEnemy, null, this);
+    this.physics.add.overlap(this.player, this.powerups, this.onCollectPower, null, this);
+
+    // ====== World bounds cleanup ======
     this.physics.world.on('worldbounds', (body) => {
       const go = body && body.gameObject;
       if (!go || !go.active) return;
@@ -159,44 +193,16 @@ class ShmupScene extends Phaser.Scene {
       }
     });
 
-    // Spawners
+    // ====== Spawners ======
     this.enemyTimer = this.time.addEvent({ delay: 1200, loop: true, callback: this.spawnEnemy, callbackScope: this });
-    this.powerTimer = this.time.addEvent({ delay: 15000, loop: true, callback: self => this.spawnPower(), callbackScope: this });
-
-    // HUD
-    this.score = 0;
-    this.lives = 3;
-    this.scoreText = this.add.text(16, 16, 'Score: 0', { fontSize:'24px', color:'#e6ecff' }).setScrollFactor(0);
-    this.livesText = this.add.text(16, 46, 'Lives: 3', { fontSize:'18px', color:'#b9c3e6' }).setScrollFactor(0);
-    this.droneText = this.add.text(16, 70, 'Drones: 0/4', { fontSize:'16px', color:'#9ad1ff' }).setScrollFactor(0);
-
-    // Game Over
-    this.isGameOver = false;
-    this.goText = this.add.text(width/2, height/2, 'GAME OVER\\nPress R to Restart', { fontSize:'42px', color:'#e6ecff', align:'center' }).setOrigin(0.5).setScrollFactor(0);
-    this.goText.setVisible(false);
-    this.input.keyboard.on('keydown-R', ()=>{ if (this.isGameOver) this.scene.restart(); });
-
-    // Firing
-    this.fireRate = 120;
-    this.shootHeld = false;
-    this.shootTimer = null;
-    this.input.keyboard.on('keydown-SPACE', ()=>{
-      if (this.shootHeld) return;
-      this.shootHeld = true;
-      this.fire();
-      this.shootTimer = this.time.addEvent({ delay: this.fireRate, loop: true, callback: this.fire, callbackScope: this });
-    });
-    this.input.keyboard.on('keyup-SPACE', ()=>{
-      this.shootHeld = false;
-      if (this.shootTimer){ this.shootTimer.remove(); this.shootTimer = null; }
-    });
-
-    // Drones
-    this.drones = [];
-    this.DRONE_CAP = 4;
+    this.powerTimer = this.time.addEvent({ delay: 15000, loop: true, callback: () => this.spawnPower(), callbackScope: this });
     this.powerTimer.paused = (this.drones.length >= this.DRONE_CAP);
+
+    // Finally, wire damage overlaps
+    this.enablePlayerHitOverlap();
   }
 
+  // ====== Spawning ======
   spawnEnemy(){
     if (this.isGameOver) return;
     const { width } = this.scale;
@@ -280,6 +286,7 @@ class ShmupScene extends Phaser.Scene {
     p.body.setAllowGravity(false);
   }
 
+  // ====== Powerups / Drones ======
   onCollectPower(player, power){
     power.disableBody(true, true);
     if (this.drones.length >= this.DRONE_CAP) return;
@@ -289,17 +296,28 @@ class ShmupScene extends Phaser.Scene {
 
   addDrone(){
     const i = this.drones.length;
-    const sprite = this.physics.add.image(this.player.x + ((i%2===0)? -50: 50), this.player.y - 60 - Math.floor(i/2)*30, 'drone');
-    sprite.setScale(0.8).setAngle(-90).setDepth(1).setAlpha(0.95);
-    sprite.body.setAllowGravity(false);
     const offsetX = ((i%2===0)? -50: 50);
     const offsetY = -60 - Math.floor(i/2)*30;
-    const drone = { sprite, offsetX, offsetY };
-    this.drones.push(drone);
+    const sprite = this.physics.add.image(this.player.x + offsetX, this.player.y + offsetY, 'drone');
+    sprite.setScale(0.8).setAngle(-90).setDepth(1).setAlpha(0.95);
+    sprite.body.setAllowGravity(false);
+
+    this.drones.push({ sprite, offsetX, offsetY });
     this.droneText.setText(`Drones: ${this.drones.length}/${this.DRONE_CAP}`);
+
     this.tweens.add({ targets: sprite, alpha: { from: 0.2, to: 0.95 }, duration: 200 });
   }
 
+  loseAllDrones(){
+    if (this.drones && this.drones.length){
+      for (const d of this.drones){ d?.sprite?.destroy(); }
+      this.drones.length = 0;
+      this.droneText?.setText(`Drones: 0/${this.DRONE_CAP || 4}`);
+    }
+    if (this.powerTimer) this.powerTimer.paused = false;
+  }
+
+  // ====== Enemy Fire ======
   fireEnemyBullet(enemy){
     const b = this.enemyBullets.get(enemy.x, enemy.y + 18, 'enemyBullet');
     if (!b) return;
@@ -313,7 +331,7 @@ class ShmupScene extends Phaser.Scene {
     b.setTint(0xff4444);
     b.setBlendMode(Phaser.BlendModes.ADD);
     b.setData('despawnAt', this.time.now + 4000);
-    // Red trail (3.60 way)
+
     const emitter = this.add.particles(0, 0, 'spark', {
       speed: 0,
       lifespan: 220,
@@ -333,6 +351,7 @@ class ShmupScene extends Phaser.Scene {
     if (!b) return;
     b.enableBody(true, enemy.x, enemy.y + 18, true, true);
     b.body.setAllowGravity(false);
+
     const angle = Phaser.Math.Angle.Between(enemy.x, enemy.y, this.player.x, this.player.y);
     const speed = 240;
     b.setVelocity(Math.cos(angle) * speed, Math.sin(angle) * speed);
@@ -343,6 +362,7 @@ class ShmupScene extends Phaser.Scene {
     b.setTint(0xff4444);
     b.setBlendMode(Phaser.BlendModes.ADD);
     b.setData('despawnAt', this.time.now + 4000);
+
     const emitter = this.add.particles(0, 0, 'spark', {
       speed: 0,
       lifespan: 220,
@@ -357,6 +377,50 @@ class ShmupScene extends Phaser.Scene {
     b.setData('emitter', emitter);
   }
 
+  // ====== Player Fire ======
+  fire(){
+    if (this.isGameOver) return;
+    this.spawnBullet(this.player.x, this.player.y - 28, -720, 0x66ccff);
+    for (const d of this.drones){
+      this.spawnBullet(d.sprite.x, d.sprite.y - 18, -700, 0x66ccff);
+    }
+  }
+
+  spawnBullet(x, y, vy, tint){
+    const b = this.bullets.get();
+    if (!b) return;
+
+    b.setTexture('bullet_anim');
+    b.enableBody(true, x, y, true, true);
+    if (b.body?.reset){ b.body.reset(x, y); }
+    b.body.setAllowGravity(false);
+    b.setDrag(0).setDamping(false).setVelocity(0,0);
+    b.setVelocityY(vy);
+    b.setAngle(0);
+    b.setCollideWorldBounds(true);
+    b.body.onWorldBounds = true;
+    b.body.setSize(8, 16, true);
+    b.setBlendMode(Phaser.BlendModes.ADD);
+    b.setData('despawnAt', this.time.now + 2200);
+    b.anims.play('bullet-flight', true);
+    b.anims.timeScale = 1.0;
+
+    // Blue trail
+    const pEmit = this.add.particles(0, 0, 'spark', {
+      speed: 0,
+      lifespan: 220,
+      alpha: { start: 0.6, end: 0 },
+      scale: { start: 0.45, end: 0.1 },
+      quantity: 1,
+      frequency: 28,
+      tint: tint || 0x66ccff,
+      blendMode: 'ADD'
+    });
+    pEmit.startFollow(b);
+    b.setData('emitter', pEmit);
+  }
+
+  // ====== Collisions (Bullets vs Enemies) ======
   onBulletHitEnemy(bullet, enemy){
     this.recycleBullet(bullet);
     let hp = enemy.getData('hp') || 1;
@@ -384,67 +448,12 @@ class ShmupScene extends Phaser.Scene {
     }
   }
 
-  onPlayerHit(player, enemyOrBullet){
-    if (this.isGameOver) return;
-    this.lives -= 1; this.livesText.setText('Lives: ' + this.lives);
-    // Lose all drones on ANY life loss
-    this.loseAllDrones();
-    if (enemyOrBullet.texture && enemyOrBullet.texture.key === 'enemyBullet'){
-      this.recycleBullet(enemyOrBullet);
-    } else {
-      if (enemyOrBullet.fireEvent){ enemyOrBullet.fireEvent.remove(); enemyOrBullet.fireEvent = null; }
-      // destroy hp bar if present
-      const bg = enemyOrBullet.getData ? enemyOrBullet.getData('hpBarBg') : null;
-      const fg = enemyOrBullet.getData ? enemyOrBullet.getData('hpBarFg') : null;
-      if (bg) bg.destroy(); if (fg) fg.destroy();
-      enemyOrBullet.disableBody(true, true);
-    }
-    this.tweens.add({ targets: this.player, alpha: 0.3, yoyo: true, repeat: 6, duration: 80, onComplete: ()=> this.player.setAlpha(1) });
-    if (this.lives <= 0){ this.gameOver(); }
+  addScore(v){
+    this.score += v;
+    this.scoreText.setText('Score: ' + this.score);
   }
 
-  addScore(v){ this.score += v; this.scoreText.setText('Score: ' + this.score); }
-
-  fire(){
-    if (this.isGameOver) return;
-    this.spawnBullet(this.player.x, this.player.y - 28, -720, 0x66ccff);
-    for (const d of this.drones){
-      this.spawnBullet(d.sprite.x, d.sprite.y - 18, -700, 0x66ccff);
-    }
-  }
-
-  spawnBullet(x, y, vy, tint){
-    const b = this.bullets.get();
-    if (!b) return;
-    b.setTexture('bullet_anim');
-    b.enableBody(true, x, y, true, true);
-    if (b.body && b.body.reset){ b.body.reset(x, y); }
-    b.body.setAllowGravity(false);
-    b.setDrag(0).setDamping(false).setVelocity(0,0);
-    b.setVelocityY(vy);
-    b.setAngle(0);
-    b.setCollideWorldBounds(true);
-    b.body.onWorldBounds = true;
-    b.body.setSize(8, 16, true);
-    b.setBlendMode(Phaser.BlendModes.ADD);
-    b.setData('despawnAt', this.time.now + 2200);
-    b.anims.play('bullet-flight', true);
-    b.anims.timeScale = 1.0;
-    // Blue trail (3.60 way)
-    const pEmit = this.add.particles(0, 0, 'spark', {
-      speed: 0,
-      lifespan: 220,
-      alpha: { start: 0.6, end: 0 },
-      scale: { start: 0.45, end: 0.1 },
-      quantity: 1,
-      frequency: 28,
-      tint: tint || 0x66ccff,
-      blendMode: 'ADD'
-    });
-    pEmit.startFollow(b);
-    b.setData('emitter', pEmit);
-  }
-
+  // ====== Utilities ======
   recycleBullet(go){
     try {
       const em = go.getData ? go.getData('emitter') : null;
@@ -457,50 +466,28 @@ class ShmupScene extends Phaser.Scene {
     }
   }
 
-  // Lose all drones helper
-  loseAllDrones(){
-    if (this.drones && this.drones.length){
-      for (const d of this.drones){ if (d && d.sprite){ d.sprite.destroy(); } }
-      this.drones.length = 0;
-      if (this.droneText) this.droneText.setText('Drones: 0/4');
-    }
-    if (this.powerTimer) this.powerTimer.paused = false;
-  }
-
+  // ====== Update Loop ======
   update(time, delta){
-    const { width, height } = this.scale;
     if (this.isGameOver) return;
-    
+    const { width, height } = this.scale;
 
     // Background scroll
     this.bg1.tilePositionY -= this.scrollSpeed * 0.6;
     this.bg2.tilePositionY -= this.scrollSpeed * 1.2;
     this.bg3.tilePositionY -= this.scrollSpeed * 2.0;
 
-    // Movement
-    const up = this.cursors.up.isDown || this.keys.W.isDown;
-    const down = this.cursors.down.isDown || this.keys.S.isDown;
-    const left = this.cursors.left.isDown || this.keys.A.isDown;
-    const right = this.cursors.right.isDown || this.keys.D.isDown;
+    // Movement with subtle inertia
     const speed = 360;
-    this.player.setVelocity(0,0);
-    
-    //Subtle inertia
-{
-  const speed = 360;
-  let vx = 0, vy = 0;
+    let vx = 0, vy = 0;
+    if (this.cursors?.left?.isDown || this.keys?.A?.isDown)  vx -= speed;
+    if (this.cursors?.right?.isDown || this.keys?.D?.isDown) vx += speed;
+    if (this.cursors?.up?.isDown || this.keys?.W?.isDown)    vy -= speed;
+    if (this.cursors?.down?.isDown || this.keys?.S?.isDown)  vy += speed;
 
-  if (this.cursors?.left?.isDown || this.keys?.A?.isDown)  vx -= speed;
-  if (this.cursors?.right?.isDown || this.keys?.D?.isDown) vx += speed;
-  if (this.cursors?.up?.isDown || this.keys?.W?.isDown)    vy -= speed;
-  if (this.cursors?.down?.isDown || this.keys?.S?.isDown)  vy += speed;
-
-  if (this.player?.body) {
-    this.player.body.velocity.x = Phaser.Math.Linear(this.player.body.velocity.x, vx, 0.60);
-    this.player.body.velocity.y = Phaser.Math.Linear(this.player.body.velocity.y, vy, 0.60);
-  }
-}
-
+    if (this.player?.body) {
+      this.player.body.velocity.x = Phaser.Math.Linear(this.player.body.velocity.x, vx, 0.60);
+      this.player.body.velocity.y = Phaser.Math.Linear(this.player.body.velocity.y, vy, 0.60);
+    }
 
     // Drones follow offsets
     for (const d of this.drones){
@@ -524,8 +511,8 @@ class ShmupScene extends Phaser.Scene {
     // Cleanup player bullets
     this.bullets.children.iterate(b => {
       if (!b || !b.active) return;
-      const vy = b.body ? b.body.velocity.y : 0;
-      if (b.y < -40 || b.y > height + 40 || (b.getData('despawnAt') && time > b.getData('despawnAt')) || Math.abs(vy) < 40){
+      const vyNow = b.body ? b.body.velocity.y : 0;
+      if (b.y < -40 || b.y > height + 40 || (b.getData('despawnAt') && time > b.getData('despawnAt')) || Math.abs(vyNow) < 40){
         this.recycleBullet(b);
       }
     });
@@ -541,9 +528,10 @@ class ShmupScene extends Phaser.Scene {
     // Enemy wobble + cull
     this.enemies.children.iterate(e => {
       if (!e || !e.active) return;
-      const a = e.getData('sinA') + e.getData('sinFreq') * delta;
+      const aPrev = e.getData('sinA') || 0;
+      const a = aPrev + (e.getData('sinFreq') || 0) * delta;
       e.setData('sinA', a);
-      e.x += Math.sin(a) * e.getData('sinAmp') * 0.1;
+      e.x += Math.sin(a) * (e.getData('sinAmp') || 0) * 0.1;
       if (e.y > height + 40){
         if (e.fireEvent){ e.fireEvent.remove(); e.fireEvent = null; }
         const bg = e.getData('hpBarBg'); const fg = e.getData('hpBarFg');
@@ -558,37 +546,34 @@ class ShmupScene extends Phaser.Scene {
       if (!p || !p.active) return;
       if (p.y > height + 40) p.disableBody(true, true);
     });
-  
-   // ====== Player bounds clamp (place at END of update()) ======
-{
-  const cam = this.cameras.main;
-  const margin = 16;
-  if (this.player) {
-    this.player.x = Phaser.Math.Clamp(
-      this.player.x,
-      cam.worldView.x + margin,
-      cam.worldView.x + cam.width - margin
-    );
-    this.player.y = Phaser.Math.Clamp(
-      this.player.y,
-      cam.worldView.y + margin,
-      cam.worldView.y + cam.height - margin
-    );
-  }}
-  }
-  
 
+    // Clamp player to camera view with a small margin
+    const margin = 16;
+    if (this.player) {
+      this.player.x = Phaser.Math.Clamp(
+        this.player.x,
+        this.cameras.main.worldView.x + margin,
+        this.cameras.main.worldView.x + this.cameras.main.width - margin
+      );
+      this.player.y = Phaser.Math.Clamp(
+        this.player.y,
+        this.cameras.main.worldView.y + margin,
+        this.cameras.main.worldView.y + this.cameras.main.height - margin
+      );
+    }
+  }
+
+  // ====== End of Run ======
   gameOver(){
-    // Also nuke bars for any remaining enemies
+    // Destroy remaining enemy HP bars
     this.enemies.children.iterate(e => {
       if (!e) return;
-      const bg = e.getData && e.getData('hpBarBg'); const fg = e.getData && e.getData('hpBarFg');
+      const bg = e.getData?.('hpBarBg'); const fg = e.getData?.('hpBarFg');
       if (bg) bg.destroy(); if (fg) fg.destroy();
-      e.setData && e.setData('hpBarBg', null); e.setData && e.setData('hpBarFg', null);
+      e.setData?.('hpBarBg', null); e.setData?.('hpBarFg', null);
     });
     this.isGameOver = true;
     this.physics.world.pause();
     this.goText.setVisible(true);
   }
-  
 }
